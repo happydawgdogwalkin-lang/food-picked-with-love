@@ -77,7 +77,8 @@
       </div>
       <div class="row">
         <button id="addBtn" class="primary">Add</button>
-        <span class="small">Tip: leave lat/lng empty to place at city center (approx).</span>
+        <button id="cancelEditBtn" style="display:none">Cancel</button>
+        <span class="small" id="formHint">Tip: leave lat/lng empty to place at city center (approx).</span>
       </div>
     </div>
 
@@ -113,6 +114,9 @@
     // ======== State ========
     let locations = [];  // normalized list {id,address,city,...,fruitList,coords:{lat,lng}}
     let map, markers = [];
+    let formMode = 'add'; // 'add' | 'edit'
+    let editId = null;
+
     const $ = sel => document.querySelector(sel);
     const setStatus = (msg) => { const n = $('#status'); if (n) n.textContent = msg || ''; };
 
@@ -250,7 +254,8 @@
               <div style="margin-top:6px">${last}</div>
               ${approx}
             </div>
-            <div>
+            <div style="display:flex;gap:8px">
+              <button onclick="event.stopPropagation(); onEdit('${l.id}')" class="">Edit</button>
               <button class="danger" onclick="event.stopPropagation(); onDelete('${l.id}')">Delete</button>
             </div>
           </div>
@@ -327,19 +332,52 @@
       }
     }
 
-    // ======== Add/Delete handlers (with backend) ========
-    async function onAdd(){
+    // ======== Add/Edit/Delete handlers (with backend) ========
+    function setFormMode(mode){
+      formMode = mode; // 'add' or 'edit'
+      const addBtn = $('#addBtn');
+      const cancelBtn = $('#cancelEditBtn');
+      const hint = $('#formHint');
+      if(mode === 'edit'){
+        addBtn.textContent = 'Save';
+        cancelBtn.style.display = 'inline-block';
+        hint.textContent = 'Editing existing location. Update fields and click Save.';
+      } else {
+        addBtn.textContent = 'Add';
+        cancelBtn.style.display = 'none';
+        hint.textContent = 'Tip: leave lat/lng empty to place at city center (approx).';
+        editId = null;
+      }
+    }
+
+    function fillFormFrom(rec){
+      $('#fAddress').value = rec.address || '';
+      $('#fCity').value = rec.city || '';
+      $('#fState').value = rec.state || 'CA';
+      $('#fZip').value = rec.zip || '';
+      $('#fFruits').value = rec.fruits || '';
+      $('#fLastVisit').value = rec.lastVisit || '';
+      $('#fLat').value = rec.coords ? String(rec.coords.lat) : '';
+      $('#fLng').value = rec.coords ? String(rec.coords.lng) : '';
+    }
+
+    function clearForm(){
+      ['#fAddress','#fCity','#fState','#fZip','#fFruits','#fLastVisit','#fLat','#fLng'].forEach(s=>$(s).value='');
+    }
+
+    async function onSave(){
       const addr = $('#fAddress').value.trim();
       const city = $('#fCity').value.trim();
       const state= $('#fState').value.trim() || 'CA';
       const zip  = $('#fZip').value.trim();
-      const fruitsStr = $('#fFruits').value.trim(); // store as entered (e.g., "L/O")
+      const fruitsStr = $('#fFruits').value.trim();
       const lastVisit = $('#fLastVisit').value.trim();
       const lat = $('#fLat').value.trim();
       const lng = $('#fLng').value.trim();
       if(!addr || !city){ alert('Please provide at least Address and City.'); return; }
 
-      const id = Math.random().toString(36).slice(2,11);
+      // preserve id if editing
+      const id = (formMode === 'edit' && editId) ? editId : Math.random().toString(36).slice(2,11);
       const rec = {
         id, address: addr, city, state, zip,
         fruits: fruitsStr,
@@ -348,16 +386,32 @@
         lng: lng? Number(lng): ''
       };
       try{
-        setStatus('Saving…');
+        setStatus(formMode === 'edit' ? 'Saving changes…' : 'Saving…');
         await apiUpsert(rec);
         await reloadFromBackend();
         $('#addForm').style.display='none';
-        ['#fAddress','#fCity','#fState','#fZip','#fFruits','#fLastVisit','#fLat','#fLng'].forEach(s=>$(s).value='');
+        clearForm();
+        setFormMode('add');
         setStatus('Saved.');
       }catch(e){
         console.error(e); setStatus('Save failed.');
         alert('Error saving to server.');
       }
+    }
+
+    function onEdit(id){
+      const rec = locations.find(l => l.id === id);
+      if(!rec){ alert('Record not found.'); return; }
+      editId = id;
+      fillFormFrom(rec);
+      setFormMode('edit');
+      $('#addForm').style.display='block';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function onAdd(){
+      // legacy hook: call onSave in add mode
+      await onSave();
     }
 
     async function onDelete(id){
@@ -396,9 +450,20 @@
       $('#visitFilter').addEventListener('change', applyFilters);
       $('#toggleFormBtn').addEventListener('click', () => {
         const f = $('#addForm');
-        f.style.display = (f.style.display === 'none' || !f.style.display) ? 'block' : 'none';
+        if(f.style.display === 'none' || !f.style.display){
+          f.style.display = 'block';
+          setFormMode('add');
+          clearForm();
+        } else {
+          f.style.display = 'none';
+        }
       });
-      $('#addBtn').addEventListener('click', onAdd);
+      $('#addBtn').addEventListener('click', onSave);
+      $('#cancelEditBtn').addEventListener('click', () => {
+        clearForm();
+        setFormMode('add');
+        $('#addForm').style.display='none';
+      });
       await reloadFromBackend();
     }
 
@@ -406,5 +471,6 @@
   </script>
 </body>
 </html>
+
 
 
