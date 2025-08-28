@@ -174,8 +174,10 @@
     function normalizeRecords(rows){
       return rows.map(rec=>{
         const lastVisitDate = parseLastVisit(rec.lastVisit);
+        // 👇 ensure id is ALWAYS a string
+        const fixedId = (rec.id !== undefined && rec.id !== null) ? String(rec.id) : Math.random().toString(36).slice(2,11);
         return {
-          id: rec.id || Math.random().toString(36).slice(2,11),
+          id: fixedId,
           address: rec.address || '',
           city: rec.city || '',
           state: rec.state || '',
@@ -246,7 +248,7 @@
         const approx = l.coords ? '' : `<div class="approx">No coordinates yet — showing at city center. Paste lat/lng into code to pin the exact house.</div>`;
         const last = l.lastVisitDate ? `<span class="pill pill-grey">Last visit: ${fmtDate(l.lastVisitDate)} • ${relativeDays(l.lastVisitDate)}</span>` : `<span class="pill pill-grey">Last visit: —</span>`;
         container.insertAdjacentHTML('beforeend', `
-          <div class="item" onclick="panTo('${l.id}')">
+          <div class="item" onclick="panTo('${String(l.id)}')">
             <div class="meta">
               <div style="font-weight:700;color:#2d5016">${l.address}</div>
               <div style="color:#666">${l.city}${l.zip?`, CA ${l.zip}`:', CA'}</div>
@@ -255,8 +257,8 @@
               ${approx}
             </div>
             <div style="display:flex;gap:8px">
-              <button onclick="event.stopPropagation(); onEdit('${l.id}')" class="">Edit</button>
-              <button class="danger" onclick="event.stopPropagation(); onDelete('${l.id}')">Delete</button>
+              <button onclick="event.stopPropagation(); onEdit('${String(l.id)}')" class="">Edit</button>
+              <button class="danger" onclick="event.stopPropagation(); onDelete('${String(l.id)}')">Delete</button>
             </div>
           </div>
         `);
@@ -296,7 +298,7 @@
         });
         const iw = new google.maps.InfoWindow({ content: buildInfoContent(l) });
         marker.addListener('click', ()=> iw.open(map, marker));
-        markers.push({id:l.id, marker, location:l, infowin: iw});
+        markers.push({id:String(l.id), marker, location:l, infowin: iw});
         bounds.extend(marker.getPosition());
       });
 
@@ -324,7 +326,7 @@
     }
 
     function panTo(id){
-      const found = markers.find(m=>m.id===id);
+      const found = markers.find(m=>m.id===String(id));
       if(found){
         map.panTo(found.marker.getPosition());
         map.setZoom(Math.max(map.getZoom(), 15));
@@ -376,10 +378,10 @@
       const lng = $('#fLng').value.trim();
       if(!addr || !city){ alert('Please provide at least Address and City.'); return; }
 
-      // preserve id if editing
-      const id = (formMode === 'edit' && editId) ? editId : Math.random().toString(36).slice(2,11);
+      const id = (formMode === 'edit' && editId) ? String(editId) : Math.random().toString(36).slice(2,11);
       const rec = {
-        id, address: addr, city, state, zip,
+        id: String(id),
+        address: addr, city, state, zip,
         fruits: fruitsStr,
         lastVisit: lastVisit || '',
         lat: lat? Number(lat): '',
@@ -400,9 +402,9 @@
     }
 
     function onEdit(id){
-      const rec = locations.find(l => l.id === id);
+      const rec = locations.find(l => String(l.id) === String(id));
       if(!rec){ alert('Record not found.'); return; }
-      editId = id;
+      editId = String(id);
       fillFormFrom(rec);
       setFormMode('edit');
       $('#addForm').style.display='block';
@@ -410,7 +412,6 @@
     }
 
     async function onAdd(){
-      // legacy hook: call onSave in add mode
       await onSave();
     }
 
@@ -418,7 +419,7 @@
       if(!confirm('Delete this location?')) return;
       try{
         setStatus('Deleting…');
-        await apiDelete(id);
+        await apiDelete(String(id));
         await reloadFromBackend();
         setStatus('Deleted.');
       }catch(e){
@@ -471,6 +472,7 @@
   </script>
 </body>
 </html>
+
 
 
 
