@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>🍎 Fruit Picking Map — Marin County</title>
+<title>🍎 Food Picked With Love Harvest Map</title>
 <style>
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;margin:0;padding:20px;background:#f8f9fa}
   .header{background:#fff;border-radius:10px;padding:20px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-align:center;margin-bottom:20px}
@@ -32,8 +32,7 @@
 </head>
 <body>
   <div class="header">
-    <h1>🍎 Fruit Picking Map — Marin County</h1>
-    <p>Shared data backed by Google Sheets (password-protected via token).</p>
+    <h1>🍎 Food Picked With Love Harvest Map</h1>
   </div>
 
   <div class="legend">
@@ -73,8 +72,12 @@
         <input id="fLastVisit" placeholder="Last visit (e.g. 5/5/2024 or Dec 4, 2022)" />
       </div>
       <div class="row">
+        <input id="fLat" placeholder="Latitude (optional)" />
+        <input id="fLng" placeholder="Longitude (optional)" />
+      </div>
+      <div class="row">
         <button id="addBtn" class="primary">Add</button>
-        <span class="small">We’ll auto-geocode coordinates from the address using OpenStreetMap.</span>
+        <span class="small">Tip: leave lat/lng empty to place at city center (approx).</span>
       </div>
     </div>
 
@@ -86,15 +89,15 @@
     <div id="locationsList"></div>
   </div>
 
-  <!-- Google Maps JS -->
+  <!-- Maps JS -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCBJSkTXJqZ9RWe2dEdweKvZtejQwfSXV8"></script>
 
   <script>
     // ======== Backend config ========
-    const API_URL   = 'https://script.google.com/macros/s/AKfycbykDuMNFMkvi1Z0q3ZLArumx9CNaH82gQw-DpP3WoakxfOuSMYD-GSCF_A1M3M1KhEj9w/exec';
+    const API_URL   = 'https://script.google.com/macros/s/AKfycbz4RuPhXYlIF07kIOM1H2s_fhWb_aCYPJBOK4Ja1HG4brO-lD5CtnOLjmZr4UEspVb8Iw/exec';
     const API_TOKEN = 'x7e8y9z-secret-4839asdlfkj2394'; // must match Script Properties TOKEN exactly
 
-    // ======== Map/legend config ========
+    // ======== Map config ========
     const fruitMappings = { 
       L:'Lemons', O:'Oranges', T:'Tangerines', G:'Grapefruit', P:'Plums',
       A:'Apples', PE:'Peaches', PR:'Pears', FB:'Fava Beans', LQ:'Loquat',
@@ -107,12 +110,13 @@
     };
     const FALLBACK_CENTER = {lat:37.906038, lng:-122.544976};
 
-    // ======== State & helpers ========
-    let locations = [];
+    // ======== State ========
+    let locations = [];  // normalized list {id,address,city,...,fruitList,coords:{lat,lng}}
     let map, markers = [];
     const $ = sel => document.querySelector(sel);
     const setStatus = (msg) => { const n = $('#status'); if (n) n.textContent = msg || ''; };
 
+    // ======== Utils ========
     function normalizeCoords(c){
       if(!c && c!==0) return null;
       if (typeof c==='object' && 'lat' in c) return {lat:+c.lat, lng:+c.lng};
@@ -122,35 +126,14 @@
     }
     function parseLastVisit(s){ if(!s) return null; const d=new Date(s); return isNaN(d)?null:d; }
     function fmtDate(d){ if(!d) return ''; return `${d.getMonth()+1}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`; }
-    function relativeDays(d){ if(!d) return null; const days=Math.floor((Date.now()-d.getTime())/86400000);
+    function relativeDays(d){
+      if(!d) return null; const days=Math.floor((Date.now()-d.getTime())/86400000);
       if(days<1) return 'today'; if(days===1) return '1 day ago'; if(days<30) return `${days} days ago`;
-      const m=Math.floor(days/30); if(m<12) return `${m} mo ago`; const y=Math.floor(days/365); return `${y} yr${y>1?'s':''} ago`; }
-    function toFruitList(str){ const arr = (str ? str.split(/[\/,-]/).map(f=>f.trim().toUpperCase()).filter(Boolean) : []); return arr.length ? arr : ['NONE']; }
-
-    // ======== Nominatim Geocoding (auto) ========
-    async function geocodeAddress({address, city, state, zip}) {
-      const full = [address, city, state, zip].filter(Boolean).join(', ');
-      const alt  = [address, city, state].filter(Boolean).join(', ');
-      const url1 = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=${encodeURIComponent(full)}`;
-      const url2 = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=${encodeURIComponent(alt)}`;
-      try{
-        let r = await fetch(url1, { headers: { 'Accept-Language':'en' } });
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        let data = await r.json();
-        if(Array.isArray(data) && data.length){
-          return { lat:+data[0].lat, lng:+data[0].lon };
-        }
-        // Fallback without ZIP
-        r = await fetch(url2, { headers: { 'Accept-Language':'en' } });
-        data = await r.json();
-        if(Array.isArray(data) && data.length){
-          return { lat:+data[0].lat, lng:+data[0].lon };
-        }
-        return null;
-      }catch(err){
-        console.warn('Geocode error:', err);
-        return null;
-      }
+      const m=Math.floor(days/30); if(m<12) return `${m} mo ago`; const y=Math.floor(days/365); return `${y} yr${y>1?'s':''} ago`;
+    }
+    function toFruitList(str){
+      const arr = (str ? str.split(/[\/,-]/).map(f=>f.trim().toUpperCase()).filter(Boolean) : []);
+      return arr.length ? arr : ['NONE'];
     }
 
     // ======== Backend calls ========
@@ -183,7 +166,7 @@
       return j.deleted;
     }
 
-    // ======== Normalize records from backend ========
+    // ======== Normalize data from backend ========
     function normalizeRecords(rows){
       return rows.map(rec=>{
         const lastVisitDate = parseLastVisit(rec.lastVisit);
@@ -225,7 +208,7 @@
       const citySel  = $('#cityFilter');
       const fruitSet = new Set(), citySet = new Set();
       locations.forEach(l => { l.fruitList.forEach(f=>fruitSet.add(f)); if(l.city) citySet.add(l.city); });
-      fruitSet.add('NONE');
+      fruitSet.add('NONE'); // ensure present
       fruitSel.innerHTML = '<option value="">All Fruits</option>';
       [...Array.from(fruitSet).sort((a,b)=> (a==='NONE')?1:(b==='NONE')?-1:a.localeCompare(b))]
         .forEach(f => fruitSel.insertAdjacentHTML('beforeend', `<option value="${f}">${fruitMappings[f]||f}</option>`));
@@ -256,7 +239,7 @@
 
       filtered.forEach(l=>{
         const fruitTags = l.fruitList.map(f=>`<span class="pill">${fruitMappings[f]||f}</span>`).join(' ');
-        const approx = l.coords ? '' : `<div class="approx">No coordinates yet — showing at city center. Add lat/lng for a perfect pin.</div>`;
+        const approx = l.coords ? '' : `<div class="approx">No coordinates yet — showing at city center. Paste lat/lng into code to pin the exact house.</div>`;
         const last = l.lastVisitDate ? `<span class="pill pill-grey">Last visit: ${fmtDate(l.lastVisitDate)} • ${relativeDays(l.lastVisitDate)}</span>` : `<span class="pill pill-grey">Last visit: —</span>`;
         container.insertAdjacentHTML('beforeend', `
           <div class="item" onclick="panTo('${l.id}')">
@@ -285,7 +268,7 @@
           <div style="font-size:14px;color:#555">${l.city}${l.zip?`, CA ${l.zip}`:', CA'}</div>
           <div style="margin:8px 0">${(l.fruitList.map(f=>`<span class='pill'>${fruitMappings[f]||f}</span>`).join(' ') || '<span style="color:#666">No fruits recorded</span>')}</div>
           ${visitLine}
-          ${l.coords ? '' : '<div class="approx" style="margin-top:6px">Approximate (city center).</div>'}
+          ${l.coords ? '' : '<div class="approx" style="margin-top:6px">Approximate (city center). Add exact lat/lng for a perfect pin.</div>'}
         </div>`;
     }
 
@@ -344,42 +327,32 @@
       }
     }
 
-    // ======== Add/Delete with auto-geocoding (no lat/lng inputs) ========
+    // ======== Add/Delete handlers (with backend) ========
     async function onAdd(){
       const addr = $('#fAddress').value.trim();
       const city = $('#fCity').value.trim();
       const state= $('#fState').value.trim() || 'CA';
       const zip  = $('#fZip').value.trim();
-      const fruitsStr = $('#fFruits').value.trim();
+      const fruitsStr = $('#fFruits').value.trim(); // store as entered (e.g., "L/O")
       const lastVisit = $('#fLastVisit').value.trim();
-
+      const lat = $('#fLat').value.trim();
+      const lng = $('#fLng').value.trim();
       if(!addr || !city){ alert('Please provide at least Address and City.'); return; }
-
-      setStatus('Geocoding address…');
-      const geo = await geocodeAddress({address:addr, city, state, zip});
-      let lat = '', lng = '';
-      if(geo){
-        lat = String(geo.lat);
-        lng = String(geo.lng);
-        setStatus(`Geocoded ✓ (${lat}, ${lng}) — saving…`);
-      }else{
-        setStatus('Could not auto-geocode (saving without coords).');
-      }
 
       const id = Math.random().toString(36).slice(2,11);
       const rec = {
         id, address: addr, city, state, zip,
         fruits: fruitsStr,
         lastVisit: lastVisit || '',
-        lat: lat ? Number(lat) : '',
-        lng: lng ? Number(lng) : ''
+        lat: lat? Number(lat): '',
+        lng: lng? Number(lng): ''
       };
-
       try{
+        setStatus('Saving…');
         await apiUpsert(rec);
         await reloadFromBackend();
         $('#addForm').style.display='none';
-        ['#fAddress','#fCity','#fState','#fZip','#fFruits','#fLastVisit'].forEach(s=>$(s).value='');
+        ['#fAddress','#fCity','#fState','#fZip','#fFruits','#fLastVisit','#fLat','#fLng'].forEach(s=>$(s).value='');
         setStatus('Saved.');
       }catch(e){
         console.error(e); setStatus('Save failed.');
@@ -433,3 +406,4 @@
   </script>
 </body>
 </html>
+
