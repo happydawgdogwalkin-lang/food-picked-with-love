@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>🍎 Fruit Picking Map — Marin County</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,sans-serif;margin:0;padding:20px;background:#f8f9fa}
+  .header{background:#fff;border-radius:10px;padding:20px;box-shadow:0 2px 10px rgba(0,0,0,.1);text-align:center;margin-bottom:20px}
+  #mapContainer{background:#fff;border-radius:10px;padding:20px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+  #map{height:620px;border-radius:8px;border:2px solid #e9ecef}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+  select, input, button{padding:8px 12px;border:2px solid #ddd;border-radius:6px;background:#fff}
+  button.primary{background:#28a745;color:#fff;border-color:#28a745;cursor:pointer;font-weight:700}
+  .legend{background:#fff;border-radius:10px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.08);margin:20px 0}
+  .legend-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+  .legend-item{display:flex;align-items:center;gap:8px}
+  .legend-color{width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+  .list{background:#fff;border-radius:10px;padding:16px;box-shadow:0 2px 10px rgba(0,0,0,.08);max-height:420px;overflow:auto;margin-top:20px}
+  .item{padding:10px;border:1px solid #eee;border-radius:8px;margin-bottom:10px;cursor:pointer;display:flex;gap:10px;justify-content:space-between;align-items:start}
+  .item:hover{background:#f8f9fa;border-color:#28a745}
+  .item .meta{flex:1}
+  .pill{background:#e8f5e8;border:1px solid #28a745;border-radius:999px;padding:2px 8px;font-size:12px;margin-right:6px;color:#2d5016}
+  .pill-grey{background:#eef1f4;border:1px solid #c9d1d9;color:#334155}
+  .approx{color:#a33;font-size:12px;margin-top:6px}
+  .danger{background:#fee2e2;border-color:#fecaca;color:#991b1b}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .form{display:none;background:#fff;border-radius:10px;padding:12px;box-shadow:0 2px 10px rgba(0,0,0,.08);margin:12px 0}
+  .form .row > *{flex:1 1 180px}
+  .small{font-size:12px;color:#666}
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>🍎 Fruit Picking Map — Marin County</h1>
+    <p>Shared data backed by Google Sheets (password-protected via token).</p>
+  </div>
+
+  <div class="legend">
+    <h4>Fruit Legend</h4>
+    <div id="legendGrid" class="legend-grid"></div>
+  </div>
+
+  <div id="mapContainer">
+    <div class="controls">
+      <label>Fruit:
+        <select id="fruitFilter"><option value="">All Fruits</option></select>
+      </label>
+      <label>City:
+        <select id="cityFilter"><option value="">All Cities</option></select>
+      </label>
+      <label>Visited:
+        <select id="visitFilter">
+          <option value="">Any</option>
+          <option value="2024">Visited in 2024</option>
+          <option value="2023plus">Visited 2023+</option>
+          <option value="never">Never set</option>
+        </select>
+      </label>
+      <button id="toggleFormBtn" class="primary">+ Add Location</button>
+      <span id="status" class="small"></span>
+    </div>
+
+    <div id="addForm" class="form">
+      <div class="row">
+        <input id="fAddress" placeholder="Address" />
+        <input id="fCity" placeholder="City" />
+        <input id="fState" placeholder="State" value="CA" />
+        <input id="fZip" placeholder="ZIP" />
+      </div>
+      <div class="row">
+        <input id="fFruits" placeholder="Fruits codes (e.g. L/O or NONE)" />
+        <input id="fLastVisit" placeholder="Last visit (e.g. 5/5/2024 or Dec 4, 2022)" />
+      </div>
+      <div class="row">
+        <button id="addBtn" class="primary">Add</button>
+        <span class="small">We’ll auto-geocode coordinates from the address using OpenStreetMap.</span>
+      </div>
+    </div>
+
+    <div id="map"></div>
+  </div>
+
+  <div class="list">
+    <h3 style="margin:0 0 10px 0">All Fruit Tree Locations</h3>
+    <div id="locationsList"></div>
+  </div>
+
+  <!-- Google Maps JS -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCBJSkTXJqZ9RWe2dEdweKvZtejQwfSXV8"></script>
+
+  <script>
+    // ======== Backend config ========
+    const API_URL   = 'https://script.google.com/macros/s/AKfycbykDuMNFMkvi1Z0q3ZLArumx9CNaH82gQw-DpP3WoakxfOuSMYD-GSCF_A1M3M1KhEj9w/exec';
+    const API_TOKEN = 'x7e8y9z-secret-4839asdlfkj2394'; // must match Script Properties TOKEN exactly
+
+    // ======== Map/legend config ========
+    const fruitMappings = { 
+      L:'Lemons', O:'Oranges', T:'Tangerines', G:'Grapefruit', P:'Plums',
+      A:'Apples', PE:'Peaches', PR:'Pears', FB:'Fava Beans', LQ:'Loquat',
+      NONE:'No Fruit'
+    };
+    const fruitColors = { 
+      L:'#FFD700', O:'#FF8C00', T:'#FF4500', G:'#FFB6C1', P:'#9370DB',
+      A:'#FF0000', PE:'#FFCBA4', PR:'#90EE90', FB:'#8FBC8F', LQ:'#DDA0DD',
+      NONE:'#555555'
+    };
+    const FALLBACK_CENTER = {lat:37.906038, lng:-122.544976};
+
+    // ======== State & helpers ========
+    let locations = [];
+    let map, markers = [];
+    const $ = sel => document.querySelector(sel);
+    const setStatus = (msg) => { const n = $('#status'); if (n) n.textContent = msg || ''; };
+
+    function normalizeCoords(c){
+      if(!c && c!==0) return null;
+      if (typeof c==='object' && 'lat' in c) return {lat:+c.lat, lng:+c.lng};
+      if (Array.isArray(c)) return {lat:+c[0], lng:+c[1]};
+      if (typeof c==='string' && c.includes(',')){const [lat,lng]=c.split(',').map(Number); return {lat,lng};}
+      return null;
+    }
+    function parseLastVisit(s){ if(!s) return null; const d=new Date(s); return isNaN(d)?null:d; }
+    function fmtDate(d){ if(!d) return ''; return `${d.getMonth()+1}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`; }
+    function relativeDays(d){ if(!d) return null; const days=Math.floor((Date.now()-d.getTime())/86400000);
+      if(days<1) return 'today'; if(days===1) return '1 day ago'; if(days<30) return `${days} days ago`;
+      const m=Math.floor(days/30); if(m<12) return `${m} mo ago`; const y=Math.floor(days/365); return `${y} yr${y>1?'s':''} ago`; }
+    function toFruitList(str){ const arr = (str ? str.split(/[\/,-]/).map(f=>f.trim().toUpperCase()).filter(Boolean) : []); return arr.length ? arr : ['NONE']; }
+
+    // ======== Nominatim Geocoding (auto) ========
+    async function geocodeAddress({address, city, state, zip}) {
+      const full = [address, city, state, zip].filter(Boolean).join(', ');
+      const alt  = [address, city, state].filter(Boolean).join(', ');
+      const url1 = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=${encodeURIComponent(full)}`;
+      const url2 = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&q=${encodeURIComponent(alt)}`;
+      try{
+        let r = await fetch(url1, { headers: { 'Accept-Language':'en' } });
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        let data = await r.json();
+        if(Array.isArray(data) && data.length){
+          return { lat:+data[0].lat, lng:+data[0].lon };
+        }
+        // Fallback without ZIP
+        r = await fetch(url2, { headers: { 'Accept-Language':'en' } });
+        data = await r.json();
+        if(Array.isArray(data) && data.length){
+          return { lat:+data[0].lat, lng:+data[0].lon };
+        }
+        return null;
+      }catch(err){
+        console.warn('Geocode error:', err);
+        return null;
+      }
+    }
+
+    // ======== Backend calls ========
+    async function apiGetAll(){
+      const url = `${API_URL}?token=${encodeURIComponent(API_TOKEN)}`;
+      const r = await fetch(url, { method:'GET' });
+      if(!r.ok) throw new Error('GET failed');
+      const j = await r.json();
+      if(!j.ok) throw new Error(j.error || 'GET error');
+      return j.data;
+    }
+    async function apiUpsert(record){
+      const r = await fetch(`${API_URL}?token=${encodeURIComponent(API_TOKEN)}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'upsert', record })
+      });
+      const j = await r.json();
+      if(!j.ok) throw new Error(j.error || 'upsert error');
+      return j.id;
+    }
+    async function apiDelete(id){
+      const r = await fetch(`${API_URL}?token=${encodeURIComponent(API_TOKEN)}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ action:'delete', id })
+      });
+      const j = await r.json();
+      if(!j.ok) throw new Error(j.error || 'delete error');
+      return j.deleted;
+    }
+
+    // ======== Normalize records from backend ========
+    function normalizeRecords(rows){
+      return rows.map(rec=>{
+        const lastVisitDate = parseLastVisit(rec.lastVisit);
+        return {
+          id: rec.id || Math.random().toString(36).slice(2,11),
+          address: rec.address || '',
+          city: rec.city || '',
+          state: rec.state || '',
+          zip: rec.zip || '',
+          fruits: rec.fruits || '',
+          fruitList: toFruitList(rec.fruits),
+          coords: normalizeCoords((rec.lat!==undefined && rec.lng!==undefined) ? {lat:rec.lat,lng:rec.lng} : null),
+          lastVisit: rec.lastVisit || '',
+          lastVisitDate,
+          lastVisitYear: lastVisitDate ? lastVisitDate.getFullYear() : null
+        };
+      });
+    }
+
+    // ======== UI ========
+    function drawLegend(){
+      const grid = $('#legendGrid');
+      grid.innerHTML = '';
+      const ordered = Object.entries(fruitMappings).sort(([a],[b])=>{
+        if(a==='NONE') return 1; if(b==='NONE') return -1; return a.localeCompare(b);
+      });
+      ordered.forEach(([code,name])=>{
+        const color = fruitColors[code] || '#28a745';
+        grid.insertAdjacentHTML('beforeend', `
+          <div class="legend-item">
+            <div class="legend-color" style="background:${color}"></div>
+            <span><strong>${code}</strong> = ${name}</span>
+          </div>`);
+      });
+    }
+
+    function populateFilters(){
+      const fruitSel = $('#fruitFilter');
+      const citySel  = $('#cityFilter');
+      const fruitSet = new Set(), citySet = new Set();
+      locations.forEach(l => { l.fruitList.forEach(f=>fruitSet.add(f)); if(l.city) citySet.add(l.city); });
+      fruitSet.add('NONE');
+      fruitSel.innerHTML = '<option value="">All Fruits</option>';
+      [...Array.from(fruitSet).sort((a,b)=> (a==='NONE')?1:(b==='NONE')?-1:a.localeCompare(b))]
+        .forEach(f => fruitSel.insertAdjacentHTML('beforeend', `<option value="${f}">${fruitMappings[f]||f}</option>`));
+      citySel.innerHTML = '<option value="">All Cities</option>';
+      [...citySet].sort().forEach(c => citySel.insertAdjacentHTML('beforeend', `<option value="${c}">${c}</option>`));
+    }
+
+    function renderList(){
+      const container = $('#locationsList');
+      const fruitF = $('#fruitFilter').value;
+      const cityF  = $('#cityFilter').value;
+      const visitF = $('#visitFilter').value;
+      container.innerHTML = '';
+
+      const filtered = locations.filter(l=>{
+        if(fruitF && !l.fruitList.includes(fruitF)) return false;
+        if(cityF && l.city !== cityF) return false;
+        if(visitF === '2024' && l.lastVisitYear !== 2024) return false;
+        if(visitF === '2023plus' && (!l.lastVisitYear || l.lastVisitYear < 2023)) return false;
+        if(visitF === 'never' && l.lastVisitYear !== null) return false;
+        return true;
+      }).sort((a,b)=>{
+        const ta = a.lastVisitDate ? a.lastVisitDate.getTime() : 0;
+        const tb = b.lastVisitDate ? b.lastVisitDate.getTime() : 0;
+        if(tb !== ta) return tb - ta;
+        return (a.address||'').localeCompare((b.address||''));
+      });
+
+      filtered.forEach(l=>{
+        const fruitTags = l.fruitList.map(f=>`<span class="pill">${fruitMappings[f]||f}</span>`).join(' ');
+        const approx = l.coords ? '' : `<div class="approx">No coordinates yet — showing at city center. Add lat/lng for a perfect pin.</div>`;
+        const last = l.lastVisitDate ? `<span class="pill pill-grey">Last visit: ${fmtDate(l.lastVisitDate)} • ${relativeDays(l.lastVisitDate)}</span>` : `<span class="pill pill-grey">Last visit: —</span>`;
+        container.insertAdjacentHTML('beforeend', `
+          <div class="item" onclick="panTo('${l.id}')">
+            <div class="meta">
+              <div style="font-weight:700;color:#2d5016">${l.address}</div>
+              <div style="color:#666">${l.city}${l.zip?`, CA ${l.zip}`:', CA'}</div>
+              <div style="margin-top:6px">${fruitTags || '<span class="pill">No fruits recorded</span>'}</div>
+              <div style="margin-top:6px">${last}</div>
+              ${approx}
+            </div>
+            <div>
+              <button class="danger" onclick="event.stopPropagation(); onDelete('${l.id}')">Delete</button>
+            </div>
+          </div>
+        `);
+      });
+    }
+
+    function buildInfoContent(l){
+      const visitLine = l.lastVisitDate
+        ? `<div class="pill pill-grey" style="display:inline-block;margin-top:6px">Last visit: ${fmtDate(l.lastVisitDate)} • ${relativeDays(l.lastVisitDate)}</div>`
+        : `<div style="color:#777;margin-top:6px">Last visit: —</div>`;
+      return `
+        <div style="max-width:260px">
+          <h4 style="margin:0 0 8px;color:#2d5016">${l.address}</h4>
+          <div style="font-size:14px;color:#555">${l.city}${l.zip?`, CA ${l.zip}`:', CA'}</div>
+          <div style="margin:8px 0">${(l.fruitList.map(f=>`<span class='pill'>${fruitMappings[f]||f}</span>`).join(' ') || '<span style="color:#666">No fruits recorded</span>')}</div>
+          ${visitLine}
+          ${l.coords ? '' : '<div class="approx" style="margin-top:6px">Approximate (city center).</div>'}
+        </div>`;
+    }
+
+    function addAllMarkers(){
+      const bounds = new google.maps.LatLngBounds();
+      markers.forEach(m => m.marker.setMap(null));
+      markers = [];
+      const now = Date.now();
+
+      locations.forEach(l=>{
+        const pos = l.coords || FALLBACK_CENTER;
+        const primary = l.fruitList[0] || 'NONE';
+        const color = fruitColors[primary] || '#555555';
+        const recent = l.lastVisitDate ? (now - l.lastVisitDate.getTime()) <= 365*24*60*60*1000 : false;
+
+        const marker = new google.maps.Marker({
+          position:pos, map,
+          icon:{ path:google.maps.SymbolPath.CIRCLE, scale: recent?10:8, fillColor:color, fillOpacity:1, strokeColor: recent?'#1f6feb':'#fff', strokeWeight: recent?3:2 },
+          title:l.address, zIndex: l.coords ? 100 : 50
+        });
+        const iw = new google.maps.InfoWindow({ content: buildInfoContent(l) });
+        marker.addListener('click', ()=> iw.open(map, marker));
+        markers.push({id:l.id, marker, location:l, infowin: iw});
+        bounds.extend(marker.getPosition());
+      });
+
+      if(!bounds.isEmpty()) map.fitBounds(bounds, { padding:{top:40,right:40,bottom:40,left:40} });
+    }
+
+    function applyFilters(){
+      renderList();
+      const fruitF = $('#fruitFilter').value;
+      const cityF  = $('#cityFilter').value;
+      const visitF = $('#visitFilter').value;
+
+      const b = new google.maps.LatLngBounds(); let any=false;
+      markers.forEach(({marker, location})=>{
+        let show = true;
+        if(fruitF && !location.fruitList.includes(fruitF)) show = false;
+        if(cityF && location.city !== cityF) show = false;
+        if(visitF === '2024' && location.lastVisitYear !== 2024) show = false;
+        if(visitF === '2023plus' && (!location.lastVisitYear || location.lastVisitYear < 2023)) show = false;
+        if(visitF === 'never' && location.lastVisitYear !== null) show = false;
+        marker.setVisible(show);
+        if(show){ b.extend(marker.getPosition()); any = true; }
+      });
+      if(any) map.fitBounds(b, { padding:{top:40,right:40,bottom:40,left:40} });
+    }
+
+    function panTo(id){
+      const found = markers.find(m=>m.id===id);
+      if(found){
+        map.panTo(found.marker.getPosition());
+        map.setZoom(Math.max(map.getZoom(), 15));
+        google.maps.event.trigger(found.marker, 'click');
+      }
+    }
+
+    // ======== Add/Delete with auto-geocoding (no lat/lng inputs) ========
+    async function onAdd(){
+      const addr = $('#fAddress').value.trim();
+      const city = $('#fCity').value.trim();
+      const state= $('#fState').value.trim() || 'CA';
+      const zip  = $('#fZip').value.trim();
+      const fruitsStr = $('#fFruits').value.trim();
+      const lastVisit = $('#fLastVisit').value.trim();
+
+      if(!addr || !city){ alert('Please provide at least Address and City.'); return; }
+
+      setStatus('Geocoding address…');
+      const geo = await geocodeAddress({address:addr, city, state, zip});
+      let lat = '', lng = '';
+      if(geo){
+        lat = String(geo.lat);
+        lng = String(geo.lng);
+        setStatus(`Geocoded ✓ (${lat}, ${lng}) — saving…`);
+      }else{
+        setStatus('Could not auto-geocode (saving without coords).');
+      }
+
+      const id = Math.random().toString(36).slice(2,11);
+      const rec = {
+        id, address: addr, city, state, zip,
+        fruits: fruitsStr,
+        lastVisit: lastVisit || '',
+        lat: lat ? Number(lat) : '',
+        lng: lng ? Number(lng) : ''
+      };
+
+      try{
+        await apiUpsert(rec);
+        await reloadFromBackend();
+        $('#addForm').style.display='none';
+        ['#fAddress','#fCity','#fState','#fZip','#fFruits','#fLastVisit'].forEach(s=>$(s).value='');
+        setStatus('Saved.');
+      }catch(e){
+        console.error(e); setStatus('Save failed.');
+        alert('Error saving to server.');
+      }
+    }
+
+    async function onDelete(id){
+      if(!confirm('Delete this location?')) return;
+      try{
+        setStatus('Deleting…');
+        await apiDelete(id);
+        await reloadFromBackend();
+        setStatus('Deleted.');
+      }catch(e){
+        console.error(e); setStatus('Delete failed.');
+        alert('Error deleting on server.');
+      }
+    }
+
+    async function reloadFromBackend(){
+      setStatus('Loading…');
+      const rows = await apiGetAll();
+      locations = normalizeRecords(rows);
+      drawLegend();
+      populateFilters();
+      renderList();
+      addAllMarkers();
+      applyFilters();
+      setStatus('');
+    }
+
+    // ======== Boot ========
+    async function initMap(){
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: FALLBACK_CENTER, zoom: 12, mapTypeId: 'roadmap'
+      });
+      drawLegend();
+      $('#fruitFilter').addEventListener('change', applyFilters);
+      $('#cityFilter').addEventListener('change', applyFilters);
+      $('#visitFilter').addEventListener('change', applyFilters);
+      $('#toggleFormBtn').addEventListener('click', () => {
+        const f = $('#addForm');
+        f.style.display = (f.style.display === 'none' || !f.style.display) ? 'block' : 'none';
+      });
+      $('#addBtn').addEventListener('click', onAdd);
+      await reloadFromBackend();
+    }
+
+    document.addEventListener('DOMContentLoaded', initMap);
+  </script>
+</body>
+</html>
