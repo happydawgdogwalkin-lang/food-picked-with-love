@@ -95,16 +95,17 @@
 
   <script>
     // ======== Backend config ========
-    const API_URL   = 'https://script.google.com/macros/s/AKfycbz4RuPhXYlIF07kIOM1H2s_fhWb_aCYPJBOK4Ja1HG4brO-lD5CtnOLjmZr4UEspVb8Iw/exec';
+    // Be sure this matches your latest Deployment URL
+    const API_URL   = 'https://script.google.com/macros/s/AKfycbwLKik53rZ1NC3Bt6N-CMPTdKLoKJDLOnZAiIjlzpTHERR1ITYpgX823ubr76D7FuTxBg/exec';
     const API_TOKEN = 'x7e8y9z-secret-4839asdlfkj2394'; // must match Script Properties TOKEN exactly
 
     // ======== Map config ========
-    const fruitMappings = { 
+    const fruitMappings = {
       L:'Lemons', O:'Oranges', T:'Tangerines', G:'Grapefruit', P:'Plums',
       A:'Apples', PE:'Peaches', PR:'Pears', FB:'Fava Beans', LQ:'Loquat',
       NONE:'No Fruit'
     };
-    const fruitColors = { 
+    const fruitColors = {
       L:'#FFD700', O:'#FF8C00', T:'#FF4500', G:'#FFB6C1', P:'#9370DB',
       A:'#FF0000', PE:'#FFCBA4', PR:'#90EE90', FB:'#8FBC8F', LQ:'#DDA0DD',
       NONE:'#555555'
@@ -112,7 +113,7 @@
     const FALLBACK_CENTER = {lat:37.906038, lng:-122.544976};
 
     // ======== State ========
-    let locations = [];  // normalized list {id,address,city,...,fruitList,coords:{lat,lng}}
+    let locations = [];
     let map, markers = [];
     let formMode = 'add'; // 'add' | 'edit'
     let editId = null;
@@ -140,33 +141,54 @@
       return arr.length ? arr : ['NONE'];
     }
 
-    // ======== Backend calls ========
+    // ======== Backend calls (form-encoded to avoid CORS preflight) ========
     async function apiGetAll(){
       const url = `${API_URL}?token=${encodeURIComponent(API_TOKEN)}`;
       const r = await fetch(url, { method:'GET' });
-      if(!r.ok) throw new Error('GET failed');
-      const j = await r.json();
-      if(!j.ok) throw new Error(j.error || 'GET error');
-      return j.data;
+      const raw = await r.text();
+      try {
+        const j = JSON.parse(raw);
+        if(!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        return j.data;
+      } catch(e){
+        console.error('GET response:', raw);
+        throw e;
+      }
     }
+
     async function apiUpsert(record){
-      const r = await fetch(`${API_URL}?token=${encodeURIComponent(API_TOKEN)}`, {
+      const params = new URLSearchParams();
+      params.set('token', API_TOKEN);
+      params.set('action', 'upsert');
+      params.set('record', JSON.stringify(record));
+
+      const r = await fetch(API_URL, {
         method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action:'upsert', record })
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: params.toString()
       });
-      const j = await r.json();
-      if(!j.ok) throw new Error(j.error || 'upsert error');
+      const raw = await r.text();
+      let j;
+      try { j = JSON.parse(raw); } catch { throw new Error(`Server returned non-JSON (${r.status}): ${raw.slice(0,160)}`); }
+      if(!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       return j.id;
     }
+
     async function apiDelete(id){
-      const r = await fetch(`${API_URL}?token=${encodeURIComponent(API_TOKEN)}`, {
+      const params = new URLSearchParams();
+      params.set('token', API_TOKEN);
+      params.set('action', 'delete');
+      params.set('id', String(id));
+
+      const r = await fetch(API_URL, {
         method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action:'delete', id })
+        headers:{ 'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: params.toString()
       });
-      const j = await r.json();
-      if(!j.ok) throw new Error(j.error || 'delete error');
+      const raw = await r.text();
+      let j;
+      try { j = JSON.parse(raw); } catch { throw new Error(`Server returned non-JSON (${r.status}): ${raw.slice(0,160)}`); }
+      if(!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       return j.deleted;
     }
 
@@ -174,7 +196,6 @@
     function normalizeRecords(rows){
       return rows.map(rec=>{
         const lastVisitDate = parseLastVisit(rec.lastVisit);
-        // 👇 ensure id is ALWAYS a string
         const fixedId = (rec.id !== undefined && rec.id !== null) ? String(rec.id) : Math.random().toString(36).slice(2,11);
         return {
           id: fixedId,
@@ -184,7 +205,7 @@
           zip: rec.zip || '',
           fruits: rec.fruits || '',
           fruitList: toFruitList(rec.fruits),
-          coords: normalizeCoords((rec.lat!==undefined && rec.lng!==undefined) ? {lat:rec.lat,lng:rec.lng} : null),
+          coords: normalizeCoords((rec.lat!==undefined && rec.lng!==undefined && rec.lat!=='' && rec.lng!=='') ? {lat:rec.lat,lng:rec.lng} : null),
           lastVisit: rec.lastVisit || '',
           lastVisitDate,
           lastVisitYear: lastVisitDate ? lastVisitDate.getFullYear() : null
@@ -214,7 +235,7 @@
       const citySel  = $('#cityFilter');
       const fruitSet = new Set(), citySet = new Set();
       locations.forEach(l => { l.fruitList.forEach(f=>fruitSet.add(f)); if(l.city) citySet.add(l.city); });
-      fruitSet.add('NONE'); // ensure present
+      fruitSet.add('NONE');
       fruitSel.innerHTML = '<option value="">All Fruits</option>';
       [...Array.from(fruitSet).sort((a,b)=> (a==='NONE')?1:(b==='NONE')?-1:a.localeCompare(b))]
         .forEach(f => fruitSel.insertAdjacentHTML('beforeend', `<option value="${f}">${fruitMappings[f]||f}</option>`));
@@ -257,7 +278,7 @@
               ${approx}
             </div>
             <div style="display:flex;gap:8px">
-              <button onclick="event.stopPropagation(); onEdit('${String(l.id)}')" class="">Edit</button>
+              <button onclick="event.stopPropagation(); onEdit('${String(l.id)}')">Edit</button>
               <button class="danger" onclick="event.stopPropagation(); onDelete('${String(l.id)}')">Delete</button>
             </div>
           </div>
@@ -367,26 +388,44 @@
       ['#fAddress','#fCity','#fState','#fZip','#fFruits','#fLastVisit','#fLat','#fLng'].forEach(s=>$(s).value='');
     }
 
-    async function onSave(){
+    function buildRecordFromForm(){
       const addr = $('#fAddress').value.trim();
       const city = $('#fCity').value.trim();
       const state= $('#fState').value.trim() || 'CA';
       const zip  = $('#fZip').value.trim();
       const fruitsStr = $('#fFruits').value.trim();
       const lastVisit = $('#fLastVisit').value.trim();
-      const lat = $('#fLat').value.trim();
-      const lng = $('#fLng').value.trim();
-      if(!addr || !city){ alert('Please provide at least Address and City.'); return; }
+      const latStr = $('#fLat').value.trim();
+      const lngStr = $('#fLng').value.trim();
 
-      const id = (formMode === 'edit' && editId) ? String(editId) : Math.random().toString(36).slice(2,11);
-      const rec = {
-        id: String(id),
-        address: addr, city, state, zip,
+      if(!addr || !city){ throw new Error('Please provide at least Address and City.'); }
+
+      const record = {
+        id: (formMode === 'edit' && editId) ? String(editId) : Math.random().toString(36).slice(2,11),
+        address: addr,
+        city, state, zip,
         fruits: fruitsStr,
-        lastVisit: lastVisit || '',
-        lat: lat? Number(lat): '',
-        lng: lng? Number(lng): ''
+        lastVisit: lastVisit || ''
       };
+
+      const latNum = Number(latStr);
+      const lngNum = Number(lngStr);
+      if(Number.isFinite(latNum) && Number.isFinite(lngNum)){
+        record.lat = latNum;
+        record.lng = lngNum;
+      }
+
+      return record;
+    }
+
+    async function onSave(){
+      let rec;
+      try{
+        rec = buildRecordFromForm();
+      }catch(e){
+        alert(e.message);
+        return;
+      }
       try{
         setStatus(formMode === 'edit' ? 'Saving changes…' : 'Saving…');
         await apiUpsert(rec);
@@ -396,8 +435,9 @@
         setFormMode('add');
         setStatus('Saved.');
       }catch(e){
-        console.error(e); setStatus('Save failed.');
-        alert('Error saving to server.');
+        console.error(e);
+        setStatus('Save failed.');
+        alert('Error saving to server: ' + e.message);
       }
     }
 
@@ -411,9 +451,7 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    async function onAdd(){
-      await onSave();
-    }
+    async function onAdd(){ await onSave(); }
 
     async function onDelete(id){
       if(!confirm('Delete this location?')) return;
@@ -424,7 +462,7 @@
         setStatus('Deleted.');
       }catch(e){
         console.error(e); setStatus('Delete failed.');
-        alert('Error deleting on server.');
+        alert('Error deleting on server: ' + e.message);
       }
     }
 
@@ -472,7 +510,3 @@
   </script>
 </body>
 </html>
-
-
-
-
